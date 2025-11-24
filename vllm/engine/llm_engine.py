@@ -49,7 +49,8 @@ from vllm.sampling_params import RequestOutputKind, SamplingParams
 from vllm.sequence import (ExecuteModelRequest, ParallelSampleSequenceGroup,
                            PoolingSequenceGroupOutput, Sequence, SequenceGroup,
                            SequenceGroupBase, SequenceGroupMetadata,
-                           SequenceGroupOutput, SequenceStatus)
+                           SequenceGroupOutput, SequenceStatus, SequenceOutput,
+                           CompletionSequenceGroupOutput)
 from vllm.tracing import (SpanAttributes, SpanKind, extract_trace_context,
                           init_tracer)
 from vllm.transformers_utils.detokenizer import Detokenizer
@@ -60,6 +61,7 @@ from vllm.usage.usage_lib import (UsageContext, is_usage_stats_enabled,
                                   usage_message)
 from vllm.utils import Counter, Device, deprecate_kwargs, weak_bind
 from vllm.version import __version__ as VLLM_VERSION
+from vllm.simulator import Simulator
 
 logger = init_logger(__name__)
 _LOCAL_LOGGING_INTERVAL_SEC = 5
@@ -215,7 +217,8 @@ class LLMEngine:
         mm_registry: MultiModalRegistry = MULTIMODAL_REGISTRY,
         use_cached_outputs: bool = False,
     ) -> None:
-
+        self.simulator = Simulator()
+        self.use_simulator = True
         self.vllm_config = vllm_config
         self.model_config = vllm_config.model_config
         self.cache_config = vllm_config.cache_config
@@ -615,6 +618,11 @@ class LLMEngine:
         else:
             decoder_inputs = processed_inputs
             encoder_inputs = None
+
+        if self.use_simulator:
+            adapter = SingletonInputsAdapter(decoder_inputs)
+            prompt_token_ids = list(adapter.prompt_token_ids)
+            self.simulator.start_request(request_id, prompt_token_ids)
 
         seq = Sequence(seq_id, decoder_inputs, block_size, eos_token_id,
                        lora_request, prompt_adapter_request)
@@ -1387,7 +1395,41 @@ class LLMEngine:
                 execute_model_req.async_callback = self.async_callbacks[
                     virtual_engine]
 
-            outputs = self.model_executor.execute_model(
+            if self.use_simulator:
+                # --- Simulator path: fake model outputs ---
+                outputs = []
+
+                for sg_meta in seq_group_metadata_list:
+                    # Get the request ID for this sequence group
+                    request_id = sg_meta.request_id
+
+                    # Ask simulator for the next token for this request
+                    next_token = self.simulator.next_token(request_id)
+
+                    # If simulator is done with this request, skip producing new output
+                    if next_token is None:
+                        continue
+
+                    # For Milestone 1 assume one sequence per group, so grab its id
+                    seq_id = sg_meta.get_first_seq_id()
+
+                    # Build a minimal SequenceOutput (we can ignore logprobs for now)
+                    seq_output = SequenceOutput(
+                        parent_seq_id=seq_id,
+                        output_token=next_token,
+                        logprobs={},  # ok to leave empty for the project
+                    )
+
+                    # Wrap it into a CompletionSequenceGroupOutput
+                    group_output = CompletionSequenceGroupOutput(
+                        samples=[seq_output],
+                        prompt_logprobs=None,
+                    )
+
+                    outputs.append(group_output)
+            else:
+                # --- Normal vLLM path (GPU/CPU model execution) ---
+                outputs = self.model_executor.execute_model(
                 execute_model_req=execute_model_req)
 
             # We need to do this here so that last step's sampled_token_ids can
