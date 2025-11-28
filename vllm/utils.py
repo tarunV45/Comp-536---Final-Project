@@ -6,6 +6,7 @@ import datetime
 import enum
 import gc
 import getpass
+import importlib
 import importlib.util
 import inspect
 import ipaddress
@@ -512,8 +513,24 @@ def update_environment_variables(envs: Dict[str, str]):
         os.environ[k] = v
 
 
+# def chunk_list(lst: List[T], chunk_size: int):
+#     """Yield successive chunk_size chunks from lst."""
+#     for i in range(0, len(lst), chunk_size):
+#         yield lst[i:i + chunk_size]
+
 def chunk_list(lst: List[T], chunk_size: int):
-    """Yield successive chunk_size chunks from lst."""
+    """Yield successive chunk_size chunks from lst.
+
+    For some CPU-only or hacked environments, block_size / chunk_size may
+    end up being None or an invalid value. In that case, we fall back to
+    treating the whole list as a single chunk to avoid crashes.
+    """
+    if chunk_size is None or chunk_size <= 0:
+        # Fallback: just yield the entire list as one chunk
+        if lst:
+            yield lst
+        return
+
     for i in range(0, len(lst), chunk_size):
         yield lst[i:i + chunk_size]
 
@@ -1607,7 +1624,15 @@ def direct_register_custom_op(
 def resolve_obj_by_qualname(qualname: str) -> Any:
     """
     Resolve an object by its fully qualified name.
+
+    For our local CPU-only setup, we also handle the special value "auto",
+    which vLLM uses as a placeholder for "choose a default worker class".
     """
+    if qualname == "auto":
+        # On your Mac we always use the CPU worker when "auto" is requested.
+        from vllm.worker.cpu_worker import CPUWorker
+        return CPUWorker
+
     module_name, obj_name = qualname.rsplit(".", 1)
     module = importlib.import_module(module_name)
     return getattr(module, obj_name)
@@ -1635,7 +1660,7 @@ def kill_process_tree(pid: int):
 
     # Finally kill the parent
     with contextlib.suppress(ProcessLookupError):
-        os.kill(pid, signal.SIGKILL)
+            os.kill(pid, signal.SIGKILL)
 
 
 @dataclass

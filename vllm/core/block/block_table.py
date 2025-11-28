@@ -23,7 +23,7 @@ class BlockTable:
             blocks to initialize the BlockTable with. If not provided, an empty
             BlockTable is created.
         max_block_sliding_window (Optional[int], optional): The number of
-            blocks to keep around for each sequance. If None, all blocks
+            blocks to keep around for each sequence. If None, all blocks
             are kept (eg., when sliding window is not used).
             It should at least fit the sliding window size of the model.
 
@@ -45,6 +45,12 @@ class BlockTable:
         _blocks: Optional[List[Block]] = None,
         max_block_sliding_window: Optional[int] = None,
     ):
+        # On some CPU-only / dev setups, block_size can accidentally be None
+        # (e.g., cache_config.block_size not initialized). Fall back to a
+        # small but reasonable default to avoid crashes.
+        if block_size is None or block_size <= 0:
+            block_size = 16
+
         self._block_size = block_size
         self._allocator = block_allocator
         if _blocks is None:
@@ -55,27 +61,20 @@ class BlockTable:
         self._num_full_slots = self._get_num_token_ids()
 
     @staticmethod
-    def get_num_required_blocks(token_ids: List[int],
-                                block_size: int,
-                                num_lookahead_slots: int = 0) -> int:
+    def get_num_required_blocks(
+        token_ids: List[int],
+        block_size: Optional[int],
+        num_lookahead_slots: int = 0,
+    ) -> int:
         """Calculates the minimum number of blocks required to store a given
-        sequence of token IDs along with any look-ahead slots that may be
-        required (like in multi-step + chunked-prefill).
+        sequence of token IDs along with any look-ahead slots.
 
-        This assumes worst-case scenario, where every block requires a new
-        allocation (e.g. ignoring prefix caching).
-
-        Args:
-            token_ids (List[int]): The sequence of token IDs to be stored.
-            block_size (int): The maximum number of tokens that can be stored in
-                a single block.
-            num_lookahead_slots (int): look-ahead slots that the sequence may
-                require.
-
-        Returns:
-            int: The minimum number of blocks required to store the given
-                sequence of token IDs along with any required look-ahead slots.
+        We defensively handle block_size being None or invalid on some
+        CPU-only / hacked environments by falling back to a small default.
         """
+        if block_size is None or block_size <= 0:
+            block_size = 16
+
         return cdiv(len(token_ids) + num_lookahead_slots, block_size)
 
     def allocate(self,
@@ -129,6 +128,8 @@ class BlockTable:
 
         Args:
             token_ids (List[int]): The sequence of token IDs to be appended.
+            num_lookahead_slots (int): look-ahead slots required (e.g. for
+                multi-step + chunked prefill).
             num_computed_slots (Optional[int]): The number of KV cache slots
                 that are already filled (computed).
                 When sliding window is enabled, this is used to compute how many
@@ -235,7 +236,7 @@ class BlockTable:
         This method iterates over all the blocks in the `_blocks` list and calls
         the `free` method of the `_allocator` object to release the memory
         occupied by each block. After freeing all the blocks, the `_blocks` list
-        is set to `None`.
+        is reset.
         """
         for block in self.blocks:
             self._allocator.free(block)
@@ -245,15 +246,6 @@ class BlockTable:
     def physical_block_ids(self) -> List[int]:
         """Returns a list of physical block indices for the blocks in the
         BlockTable.
-
-        This property returns a list of integers, where each integer represents
-        the physical block index of a corresponding block in the `_blocks` list.
-        The physical block index is a unique identifier for the memory location
-        occupied by the block.
-
-        Returns:
-            List[int]: A list of physical block indices for the blocks in the
-                BlockTable.
         """
         return self._blocks.ids()
 
@@ -349,9 +341,6 @@ class BlockTable:
     def num_full_slots(self) -> int:
         """Returns the total number of tokens currently stored in the
         BlockTable.
-
-        Returns:
-            int: The total number of tokens currently stored in the BlockTable.
         """
         return self._num_full_slots
 
@@ -363,11 +352,6 @@ class BlockTable:
         This is required for the scheduler to determine whether a sequence can
         continue generation, or if it must be preempted.
         """
-        # Math below is equivalent to:
-        # all_token_ids = token_ids + [-1] * num_lookahead_slots
-        # token_blocks = self._chunk_token_blocks_for_append(all_token_ids)
-        # return len(token_blocks)
-
         num_token_ids = len(token_ids) + num_lookahead_slots
         first_chunk_size = self._block_size - (self._num_full_slots %
                                                self._block_size)

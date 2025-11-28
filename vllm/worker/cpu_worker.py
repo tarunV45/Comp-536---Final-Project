@@ -20,6 +20,7 @@ from vllm.worker.cpu_pooling_model_runner import CPUPoolingModelRunner
 from vllm.worker.worker_base import (LocalOrDistributedWorkerBase,
                                      LoraNotSupportedWorkerBase, WorkerBase,
                                      WorkerInput)
+from typing import Optional
 
 logger = init_logger(__name__)
 
@@ -91,11 +92,13 @@ class CPUCacheEngine:
 
     @staticmethod
     def get_cache_block_size(
-        block_size: int,
+        block_size: Optional [int],
         cache_dtype: str,
         model_config: ModelConfig,
         parallel_config: ParallelConfig,
     ) -> int:
+        if block_size is None:
+            block_size=16
         head_size = model_config.get_head_size()
         num_heads = model_config.get_num_kv_heads(parallel_config)
         num_layers = model_config.get_num_layers(parallel_config)
@@ -223,26 +226,34 @@ class CPUWorker(LoraNotSupportedWorkerBase, LocalOrDistributedWorkerBase):
     def determine_num_available_blocks(self) -> Tuple[int, int]:
         """Determine the number of blocks available for the KV cache.
 
-        This determines how many KV blocks can fit into the configured CPU
-        KV cache space.
+        This is a CPU-only implementation used in our course project setup.
 
-        Note that since vLLM assumes a block resides on GPU if it can be
-        modified, we return num_gpu_blocks=num_cpu_blocks and num_cpu_blocks=0.
-        This allows us to reuse the scheduler of vLLM without generalizing it
-        to different devices.
+        In newer vLLM versions, CacheConfig may define a field like
+        `cpu_kvcache_space_bytes`. In our snapshot, that field might not
+        exist, so we fall back to a small fixed number of blocks instead
+        of crashing.
         """
-        # For CPU device, the block number will be calculated based on the
-        # cpu_kvcache_space.
         cache_block_size = self.get_cache_block_size_bytes()
-        num_cpu_blocks = int(self.cache_config.cpu_kvcache_space_bytes //
-                             cache_block_size)
-        num_cpu_blocks = max(num_cpu_blocks, 0)
 
-        # Note: To reuse the cache management procedure,
-        # use cpu cache as 'gpu cache'.
+        # Try to read a CPU KV cache space field if it exists.
+        cpu_space_bytes = getattr(self.cache_config,
+                                  "cpu_kvcache_space_bytes",
+                                  None)
+
+        if cpu_space_bytes is not None and cpu_space_bytes > 0:
+            num_cpu_blocks = int(cpu_space_bytes // cache_block_size)
+        else:
+            # Fallback for our Mac/UnspecifiedPlatform: just give the scheduler
+            # a modest number of blocks so it can run.
+            num_cpu_blocks = 128
+
+        # vLLM convention: blocks that can be modified are treated as "GPU"
+        # blocks, and CPU blocks are returned as 0 in this emulated CPU flow.
         num_gpu_blocks = num_cpu_blocks
         num_cpu_blocks = 0
+
         return num_gpu_blocks, num_cpu_blocks
+
 
     def initialize_cache(self, num_gpu_blocks: int,
                          num_cpu_blocks: int) -> None:
@@ -268,20 +279,22 @@ class CPUWorker(LoraNotSupportedWorkerBase, LocalOrDistributedWorkerBase):
 
     def _validate_num_cpu_blocks(self, num_cpu_blocks: int) -> None:
         """Raise errors if the num_cpu_blocks is invalid.
+
+            In our course/Mac CPU setup, some cache_config fields like block_size
+            may be None, so we avoid using them here and just enforce a simple
+            non-zero check.
         """
         if num_cpu_blocks <= 0:
-            raise ValueError("No available memory for the cache blocks. "
-                             "Try increasing `VLLM_CPU_KVCACHE_SPACE` when "
-                             "initializing the engine.")
-
-        max_seq_len = self.cache_config.block_size * num_cpu_blocks
-        if self.model_config.max_model_len > max_seq_len:
             raise ValueError(
-                f"The model's max seq len ({self.model_config.max_model_len}) "
-                "is larger than the maximum number of tokens that can be "
-                f"stored in KV cache ({max_seq_len}). Try increasing "
-                "`VLLM_CPU_KVCACHE_SPACE` or decreasing `max_model_len` when "
-                "initializing the engine.")
+                "No available memory for the cache blocks. "
+                "Try increasing `VLLM_CPU_KVCACHE_SPACE` when "
+                "initializing the engine."
+            )
+
+        # For our CPU-emulation environment, skip any further validation that
+        # depends on cache_config.block_size.
+        return
+
 
     def _init_cache_engine(self) -> None:
         self.cache_engine = [

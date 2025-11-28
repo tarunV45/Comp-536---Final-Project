@@ -240,5 +240,38 @@ class Platform:
 
 
 class UnspecifiedPlatform(Platform):
-    _enum = PlatformEnum.UNSPECIFIED
-    device_type = ""
+    """Fallback platform when vLLM cannot detect the real platform.
+
+    On your Mac, vLLM sees `UNSPECIFIED` and used to crash when asking
+    about async output or device type. For this project we treat this as
+    a simple CPU-only platform so you can construct LLM() and run tests.
+    """
+
+    # Pretend this is a CPU platform
+    _enum = PlatformEnum.CPU
+    device_name = "unspecified_cpu"
+    device_type = "cpu"
+    dispatch_key = "CPU"
+    supported_quantization: list[str] = []
+
+    @classmethod
+    def get_device_name(cls, device_id: int = 0) -> str:
+        # Generic CPU name; this is mostly used for logging.
+        return cls.device_name
+
+    @classmethod
+    def get_device_total_memory(cls, device_id: int = 0) -> int:
+        # On an "unspecified" CPU platform we don't have a GPU memory concept.
+        # Returning 0 is safe and avoids raising on memory queries.
+        if torch.cuda.is_available():
+            try:
+                return torch.cuda.get_device_properties(device_id).total_memory
+            except Exception:
+                return 0
+        return 0
+
+    @classmethod
+    def is_async_output_supported(cls, enforce_eager: Optional[bool]) -> bool:
+        # Conservative: say "no async output support" so vLLM uses
+        # simpler/eager execution paths.
+        return False

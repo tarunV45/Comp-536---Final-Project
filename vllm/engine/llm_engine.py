@@ -50,7 +50,7 @@ from vllm.sequence import (ExecuteModelRequest, ParallelSampleSequenceGroup,
                            PoolingSequenceGroupOutput, Sequence, SequenceGroup,
                            SequenceGroupBase, SequenceGroupMetadata,
                            SequenceGroupOutput, SequenceStatus, SequenceOutput,
-                           CompletionSequenceGroupOutput)
+                           CompletionSequenceGroupOutput, Logprob)
 from vllm.tracing import (SpanAttributes, SpanKind, extract_trace_context,
                           init_tracer)
 from vllm.transformers_utils.detokenizer import Detokenizer
@@ -1087,7 +1087,7 @@ class LLMEngine:
             if has_multiple_outputs:
                 output = outputs_by_sequence_group[i]
             else:
-                output = [outputs_by_sequence_group[0][i]]
+                output = [outputs_by_sequence_group[i]]
 
             if not is_async:
                 if self.scheduler_config.is_multi_step:
@@ -1399,25 +1399,38 @@ class LLMEngine:
                 # --- Simulator path: fake model outputs ---
                 outputs = []
 
-                for sg_meta in seq_group_metadata_list:
+                # Keep outputs aligned with seq_group_metadata_list: one output per group
+                for idx, sg_meta in enumerate(seq_group_metadata_list):
                     # Get the request ID for this sequence group
                     request_id = sg_meta.request_id
 
                     # Ask simulator for the next token for this request
                     next_token = self.simulator.next_token(request_id)
 
-                    # If simulator is done with this request, skip producing new output
+                    # Get the corresponding sequence group
+                    scheduled_seq_group = scheduler_outputs.scheduled_seq_groups[idx]
+                    seq_group = scheduled_seq_group.seq_group
+
+                    # For Milestone 1, assume one sequence per group
+                    seq = seq_group.get_seqs()[0]
+                    seq_id = seq.seq_id
+
+                    # If simulator is done (returns None), emit EOS for this seq
                     if next_token is None:
-                        continue
+                        next_token = seq.eos_token_id
 
-                    # For Milestone 1 assume one sequence per group, so grab its id
-                    seq_id = sg_meta.get_first_seq_id()
+                    # Create a Logprob object for this token
+                    token_logprob = Logprob(
+                        logprob=0.0,      # dummy value is fine for the project
+                        rank=0,
+                        decoded_token=None,
+                    )
 
-                    # Build a minimal SequenceOutput (we can ignore logprobs for now)
+                    # Build SequenceOutput with correct logprob structure
                     seq_output = SequenceOutput(
                         parent_seq_id=seq_id,
                         output_token=next_token,
-                        logprobs={},  # ok to leave empty for the project
+                        logprobs={next_token: token_logprob},
                     )
 
                     # Wrap it into a CompletionSequenceGroupOutput
@@ -1430,7 +1443,7 @@ class LLMEngine:
             else:
                 # --- Normal vLLM path (GPU/CPU model execution) ---
                 outputs = self.model_executor.execute_model(
-                execute_model_req=execute_model_req)
+                    execute_model_req=execute_model_req)
 
             # We need to do this here so that last step's sampled_token_ids can
             # be passed to the next iteration for PP.

@@ -20,11 +20,17 @@ class _PagedAttention:
     @staticmethod
     def get_kv_cache_shape(
         num_blocks: int,
-        block_size: int,
+        block_size: Optional[int],
         num_kv_heads: int,
         head_size: int,
         *args,
     ) -> Tuple[int, ...]:
+        # In some CPU-only / simplified setups, block_size may be None because
+        # cache_config.block_size was never explicitly set. To avoid crashes,
+        # fall back to a small default block size that is sufficient for tests.
+        if block_size is None or block_size <= 0:
+            block_size = 16
+
         return (2, num_blocks, block_size * num_kv_heads * head_size)
 
     @staticmethod

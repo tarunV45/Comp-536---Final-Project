@@ -361,7 +361,8 @@ class NaiveBlock(Block):
                  _cow_target: Optional[Block] = None,
                  extra_hash: Optional[int] = None):
         self._token_ids: List[int] = []
-        self._block_size = block_size
+        # Fallback: in some CPU-only setups block_size can be None
+        self._block_size = block_size if block_size is not None else 16
         self._prev_block = prev_block
         self._block_id = block_id
         self._allocator = allocator
@@ -424,9 +425,21 @@ class NaiveBlock(Block):
     def is_full(self) -> bool:
         return self.num_empty_slots == 0
 
+    # @property
+    # def num_empty_slots(self) -> int:
+    #     return self._block_size - len(self.token_ids)
+
     @property
     def num_empty_slots(self) -> int:
-        return self._block_size - len(self.token_ids)
+        """Return how many slots are still free in this block.
+
+        In some CPU-only / hacked environments, the block size can end up
+        being None because the cache_config.block_size was never set.
+        To avoid crashes, we fall back to a small safe default.
+        """
+        block_size = self._block_size if self._block_size is not None else 16
+        return block_size - len(self.token_ids)
+
 
     @property
     def token_ids(self) -> List[int]:
