@@ -9,20 +9,22 @@ from tools.sharegpt_client_simulator import ShareGPTClientSimulator, RequestEven
 
 
 def print_sender(event: RequestEvent) -> None:
+    """Simple callback used by the simulator to 'send' requests."""
     print("=== EVENT ===")
-    print("t:", round(event.timestamp, 3),
-          "| conv:", event.conv_id,
-          "| turn:", event.turn_index,
-          "| mode:", event.meta["mode"])
-    print("Prompt snippet:", event.prompt_text[:200].replace("\n", " "))
-    print()
+    print(f"time: {event.timestamp:.3f}s")
+    print(f"conversation id: {event.conv_id}")
+    print(f"turn index: {event.turn_index}")
+    print(f"mode: {event.meta.get('mode', '?')}")
+    print("prompt:")
+    print(event.prompt)
+    print("-" * 40)
 
 
-def main():
+def main() -> None:
     sim = ShareGPTClientSimulator(
-        # if huggingface download is slow, lower max_convs
-        max_convs=3,
-        rate_lambda=2.0,
+        max_convs=3,        # how many conversations to replay
+        rate_lambda=2.0,    # Poisson rate λ for inter-arrival times
+        dataset_split="train",
     )
 
     print("---- SINGLE TURN ----")
