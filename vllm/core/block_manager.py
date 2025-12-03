@@ -16,6 +16,54 @@ from vllm.utils import Device
 SeqId = int
 EncoderSeqId = str
 
+# vllm/core/block_manager.py (or a new file like vllm/core/prefix_metrics.py)
+
+from dataclasses import dataclass, asdict
+from typing import Dict, List, Tuple, Optional
+from collections import defaultdict
+
+# Logical block key: tokens in a contiguous block of size `block_size`.
+BlockKey = Tuple[int, ...]
+
+
+@dataclass
+class RequestPrefixMetrics:
+    request_id: str
+    mode: str  # "single" or "multi"
+    total_tokens: int = 0
+    reused_tokens: int = 0
+
+    @property
+    def reuse_fraction(self) -> float:
+        if self.total_tokens == 0:
+            return 0.0
+        return self.reused_tokens / self.total_tokens
+
+
+@dataclass
+class BlockStats:
+    # Number of times this block appeared *after* first use
+    hits: int = 0
+    # For gap analysis: times (in seconds or "steps") of each use
+    use_times: List[float] = None
+
+    def __post_init__(self):
+        if self.use_times is None:
+            self.use_times = []
+
+    def record_use(self, t: float):
+        self.use_times.append(t)
+        if len(self.use_times) > 1:
+            # Every use after first counts as a "hit"
+            self.hits += 1
+
+    def reuse_gaps(self) -> List[float]:
+        if len(self.use_times) < 2:
+            return []
+        return [
+            self.use_times[i] - self.use_times[i - 1]
+            for i in range(1, len(self.use_times))
+        ]
 
 class SelfAttnBlockSpaceManager(BlockSpaceManager):
     """BlockSpaceManager which manages the allocation of KV cache.

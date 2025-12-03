@@ -1,5 +1,6 @@
 import copy
 import time
+import os
 from collections import Counter as collectionsCounter
 from collections import deque
 from contextlib import contextmanager
@@ -62,6 +63,17 @@ from vllm.usage.usage_lib import (UsageContext, is_usage_stats_enabled,
 from vllm.utils import Counter, Device, deprecate_kwargs, weak_bind
 from vllm.version import __version__ as VLLM_VERSION
 from vllm.simulator import Simulator
+
+from time import monotonic
+from typing import Dict
+from dataclasses import asdict
+
+# If you put the dataclasses in a separate file, adjust the import accordingly
+from vllm.core.block_manager import (
+    RequestPrefixMetrics,
+    BlockStats,
+    BlockKey,
+)
 
 logger = init_logger(__name__)
 _LOCAL_LOGGING_INTERVAL_SEC = 5
@@ -233,6 +245,13 @@ class LLMEngine:
         self.prompt_adapter_config = vllm_config.prompt_adapter_config  # noqa
         self.observability_config = vllm_config.observability_config or ObservabilityConfig(  # noqa
         )
+        # === Prefix sharing metrics ===
+        self._prefix_request_metrics: Dict[str, RequestPrefixMetrics] = {}
+        self._prefix_block_stats: Dict[BlockKey, BlockStats] = {}
+        # One global timeline for “time”; can be monotonic seconds or “step count”
+        self._prefix_time_zero: float = monotonic()
+        # request_id -> prompt token ids (decoder side)
+        self._prefix_request_tokens: Dict[str, List[int]] = {}
 
         logger.info(
             "Initializing an LLM engine (v%s) with config: %s, "
@@ -623,6 +642,24 @@ class LLMEngine:
             adapter = SingletonInputsAdapter(decoder_inputs)
             prompt_token_ids = list(adapter.prompt_token_ids)
             self.simulator.start_request(request_id, prompt_token_ids)
+
+            # ===== Prefix metrics: per-request & block-level =====
+            # Decide the mode: single-turn vs multi-turn.
+            # You can pass this via request.metadata; for now assume
+            # request.params.extra_mode is set by your HTTP layer.
+            mode = os.getenv("PREFIX_MODE", "single")
+
+            # block_size: reuse whatever your block manager uses. If you don't
+            # have a direct reference, just set a constant equal to your
+            # engine config, e.g., 16.
+            block_size = getattr(self, "block_size", 16)
+
+            self._compute_reuse_from_prefixes(
+                request_id=request_id,
+                mode=mode,
+                token_ids=prompt_token_ids,
+                block_size=block_size,
+            )
 
         seq = Sequence(seq_id, decoder_inputs, block_size, eos_token_id,
                        lora_request, prompt_adapter_request)
@@ -2084,3 +2121,103 @@ class LLMEngine:
                 sampling_params.logits_processors.extend(logits_processors)
 
         return sampling_params
+    
+        # ----------------- Prefix metrics helpers -----------------
+
+    def _now_for_prefix_metrics(self) -> float:
+        # You can also use a simple counter instead of real time.
+        return monotonic() - self._prefix_time_zero
+
+    def _iter_block_keys(
+        self,
+        token_ids: List[int],
+        block_size: int,
+    ) -> List[BlockKey]:
+        """Split a token list into logical blocks of size `block_size`."""
+        if block_size <= 0:
+            return []
+        return [
+            tuple(token_ids[i : i + block_size])
+            for i in range(0, len(token_ids), block_size)
+        ]
+
+    def _update_block_stats(
+        self,
+        token_ids: List[int],
+        block_size: int,
+    ) -> None:
+        """Update hits & reuse gaps for each logical block in this prompt."""
+        t = self._now_for_prefix_metrics()
+        for key in self._iter_block_keys(token_ids, block_size):
+            stats = self._prefix_block_stats.get(key)
+            if stats is None:
+                stats = BlockStats()
+                self._prefix_block_stats[key] = stats
+            stats.record_use(t)
+
+    def _compute_reuse_from_prefixes(
+        self,
+        request_id: str,
+        mode: str,
+        token_ids: List[int],
+        block_size: int,
+    ) -> None:
+        total = len(token_ids)
+        reuse_len = 0
+
+        # Compare against *previous* requests only
+        for other_id, other_tokens in self._prefix_request_tokens.items():
+            if other_id == request_id:
+                continue
+            # Longest common prefix between token_ids and other_tokens
+            prefix = 0
+            for a, b in zip(token_ids, other_tokens):
+                if a != b:
+                    break
+                prefix += 1
+            if prefix > reuse_len:
+                reuse_len = prefix
+
+        metrics = RequestPrefixMetrics(
+            request_id=request_id,
+            mode=mode,
+            total_tokens=total,
+            reused_tokens=reuse_len,
+        )
+        self._prefix_request_metrics[request_id] = metrics
+
+        # Remember the tokens for future comparisons
+        self._prefix_request_tokens[request_id] = list(token_ids)
+
+        # Also update block stats for *this* prompt
+        self._update_block_stats(token_ids, block_size)
+
+    def dump_prefix_metrics(self, path_prefix: str) -> None:
+        """
+        Dump metrics into two JSONL files:
+            - {path_prefix}_requests.jsonl
+            - {path_prefix}_blocks.jsonl
+        """
+        import json
+
+        req_path = f"{path_prefix}_requests.jsonl"
+        blk_path = f"{path_prefix}_blocks.jsonl"
+
+        with open(req_path, "w") as f:
+            for m in self._prefix_request_metrics.values():
+                obj = asdict(m)
+                obj["reuse_fraction"] = m.reuse_fraction
+                f.write(json.dumps(obj) + "\n")
+
+        with open(blk_path, "w") as f:
+            for key, stats in self._prefix_block_stats.items():
+                obj = {
+                    "block_key": list(key),  # careful, can be large; OK for analysis
+                    "hits": stats.hits,
+                    "use_times": stats.use_times,
+                    "reuse_gaps": stats.reuse_gaps(),
+                }
+                f.write(json.dumps(obj) + "\n")
+
+        print(f"[prefix-metrics] wrote {req_path} and {blk_path}")
+
