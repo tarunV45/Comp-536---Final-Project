@@ -652,7 +652,12 @@ class LLMEngine:
             # block_size: reuse whatever your block manager uses. If you don't
             # have a direct reference, just set a constant equal to your
             # engine config, e.g., 16.
-            block_size = getattr(self, "block_size", 16)
+            # Logical block size for metrics (override via env if set)
+            env_block_size = os.getenv("PREFIX_BLOCK_SIZE")
+            if env_block_size is not None:
+                block_size = int(env_block_size)
+            else:
+                block_size = getattr(self, "block_size", 16)
 
             self._compute_reuse_from_prefixes(
                 request_id=request_id,
