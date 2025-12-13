@@ -649,10 +649,9 @@ class LLMEngine:
             # request.params.extra_mode is set by your HTTP layer.
             mode = os.getenv("PREFIX_MODE", "single")
 
-            # block_size: reuse whatever your block manager uses. If you don't
-            # have a direct reference, just set a constant equal to your
-            # engine config, e.g., 16.
-            # Logical block size for metrics (override via env if set)
+            # NEW: workload label, e.g., "chat_single", "summarization", etc.
+            workload = os.getenv("PREFIX_WORKLOAD", "unknown")
+
             env_block_size = os.getenv("PREFIX_BLOCK_SIZE")
             if env_block_size is not None:
                 block_size = int(env_block_size)
@@ -664,6 +663,7 @@ class LLMEngine:
                 mode=mode,
                 token_ids=prompt_token_ids,
                 block_size=block_size,
+                workload=workload,
             )
 
         seq = Sequence(seq_id, decoder_inputs, block_size, eos_token_id,
@@ -2166,6 +2166,7 @@ class LLMEngine:
         mode: str,
         token_ids: List[int],
         block_size: int,
+        workload: str = "unknown",
     ) -> None:
         total = len(token_ids)
         reuse_len = 0
@@ -2188,6 +2189,7 @@ class LLMEngine:
             mode=mode,
             total_tokens=total,
             reused_tokens=reuse_len,
+            workload=workload,
         )
         self._prefix_request_metrics[request_id] = metrics
 

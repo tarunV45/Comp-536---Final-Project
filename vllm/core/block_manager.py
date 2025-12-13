@@ -32,7 +32,7 @@ class RequestPrefixMetrics:
     mode: str  # "single" or "multi"
     total_tokens: int = 0
     reused_tokens: int = 0
-
+    workload: str = "unknown"
     @property
     def reuse_fraction(self) -> float:
         if self.total_tokens == 0:
@@ -46,6 +46,7 @@ class BlockStats:
     hits: int = 0
     # For gap analysis: times (in seconds or "steps") of each use
     use_times: List[float] = None
+    workload: str = "unknown"
 
     def __post_init__(self):
         if self.use_times is None:

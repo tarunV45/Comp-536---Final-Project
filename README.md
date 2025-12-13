@@ -1,140 +1,386 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/vllm/main/docs/source/assets/logos/vllm-logo-text-dark.png">
-    <img alt="vLLM" src="https://raw.githubusercontent.com/vllm-project/vllm/main/docs/source/assets/logos/vllm-logo-text-light.png" width=55%>
-  </picture>
-</p>
+# A Study of Prefix Sharing in LLM Serving
 
-<h3 align="center">
-Easy, fast, and cheap LLM serving for everyone
-</h3>
+This repository contains our modified fork of **vLLM** for the course project:
 
-<p align="center">
-| <a href="https://docs.vllm.ai"><b>Documentation</b></a> | <a href="https://vllm.ai"><b>Blog</b></a> | <a href="https://arxiv.org/abs/2309.06180"><b>Paper</b></a> | <a href="https://discord.gg/jz7wjKhh6g"><b>Discord</b></a> | <a href="https://x.com/vllm_project"><b>Twitter/X</b></a> | <a href="https://slack.vllm.ai"><b>Developer Slack</b></a> |
-</p>
+> **A Study of Prefix Sharing in LLM Serving**
 
----
+We instrument vLLM to:
 
-*Latest News* 🔥
-- [2024/12] vLLM joins [pytorch ecosystem](https://pytorch.org/blog/vllm-joins-pytorch)! Easy, Fast, and Cheap LLM Serving for Everyone!
-- [2024/11] We hosted [the seventh vLLM meetup](https://lu.ma/h0qvrajz) with Snowflake! Please find the meetup slides from vLLM team [here](https://docs.google.com/presentation/d/1e3CxQBV3JsfGp30SwyvS3eM_tW-ghOhJ9PAJGK6KR54/edit?usp=sharing), and Snowflake team [here](https://docs.google.com/presentation/d/1qF3RkDAbOULwz9WK5TOltt2fE9t6uIc_hVNLFAaQX6A/edit?usp=sharing).
-- [2024/10] We have just created a developer slack ([slack.vllm.ai](https://slack.vllm.ai)) focusing on coordinating contributions and discussing features. Please feel free to join us there!
-- [2024/10] Ray Summit 2024 held a special track for vLLM! Please find the opening talk slides from the vLLM team [here](https://docs.google.com/presentation/d/1B_KQxpHBTRa_mDF-tR6i8rWdOU5QoTZNcEg2MKZxEHM/edit?usp=sharing). Learn more from the [talks](https://www.youtube.com/playlist?list=PLzTswPQNepXl6AQwifuwUImLPFRVpksjR) from other vLLM contributors and users!
-- [2024/09] We hosted [the sixth vLLM meetup](https://lu.ma/87q3nvnh) with NVIDIA! Please find the meetup slides [here](https://docs.google.com/presentation/d/1wrLGwytQfaOTd5wCGSPNhoaW3nq0E-9wqyP7ny93xRs/edit?usp=sharing).
-- [2024/07] We hosted [the fifth vLLM meetup](https://lu.ma/lp0gyjqr) with AWS! Please find the meetup slides [here](https://docs.google.com/presentation/d/1RgUD8aCfcHocghoP3zmXzck9vX3RCI9yfUAB2Bbcl4Y/edit?usp=sharing).
-- [2024/07] In partnership with Meta, vLLM officially supports Llama 3.1 with FP8 quantization and pipeline parallelism! Please check out our blog post [here](https://blog.vllm.ai/2024/07/23/llama31.html).
-- [2024/06] We hosted [the fourth vLLM meetup](https://lu.ma/agivllm) with Cloudflare and BentoML! Please find the meetup slides [here](https://docs.google.com/presentation/d/1iJ8o7V2bQEi0BFEljLTwc5G1S10_Rhv3beed5oB0NJ4/edit?usp=sharing).
-- [2024/04] We hosted [the third vLLM meetup](https://robloxandvllmmeetup2024.splashthat.com/) with Roblox! Please find the meetup slides [here](https://docs.google.com/presentation/d/1A--47JAK4BJ39t954HyTkvtfwn0fkqtsL8NGFuslReM/edit?usp=sharing).
-- [2024/01] We hosted [the second vLLM meetup](https://lu.ma/ygxbpzhl) with IBM! Please find the meetup slides [here](https://docs.google.com/presentation/d/12mI2sKABnUw5RBWXDYY-HtHth4iMSNcEoQ10jDQbxgA/edit?usp=sharing).
-- [2023/10] We hosted [the first vLLM meetup](https://lu.ma/first-vllm-meetup) with a16z! Please find the meetup slides [here](https://docs.google.com/presentation/d/1QL-XPFXiFpDBh86DbEegFXBXFXjix4v032GhShbKf3s/edit?usp=sharing).
-- [2023/08] We would like to express our sincere gratitude to [Andreessen Horowitz](https://a16z.com/2023/08/30/supporting-the-open-source-ai-community/) (a16z) for providing a generous grant to support the open-source development and research of vLLM.
-- [2023/06] We officially released vLLM! FastChat-vLLM integration has powered [LMSYS Vicuna and Chatbot Arena](https://chat.lmsys.org) since mid-April. Check out our [blog post](https://vllm.ai).
+- Plug in a **token simulator** (Milestone 1),
+- Measure **prefix reuse** and **KV-cache behavior** under different workloads (Milestone 2),
+- Explore **cache eviction policies** for **heterogeneous workloads** (Milestone 3).
+
+All experiments are designed to run on a **CPU-only machine** using the Torch SDPA attention backend.
 
 ---
-## About
-vLLM is a fast and easy-to-use library for LLM inference and serving.
 
-vLLM is fast with:
+## 1. Environment Setup
 
-- State-of-the-art serving throughput
-- Efficient management of attention key and value memory with **PagedAttention**
-- Continuous batching of incoming requests
-- Fast model execution with CUDA/HIP graph
-- Quantizations: [GPTQ](https://arxiv.org/abs/2210.17323), [AWQ](https://arxiv.org/abs/2306.00978), INT4, INT8, and FP8.
-- Optimized CUDA kernels, including integration with FlashAttention and FlashInfer.
-- Speculative decoding
-- Chunked prefill
+### 1.1 Prerequisites
 
-**Performance benchmark**: We include a performance benchmark at the end of [our blog post](https://blog.vllm.ai/2024/09/05/perf-update.html). It compares the performance of vLLM against other LLM serving engines ([TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM), [SGLang](https://github.com/sgl-project/sglang) and [LMDeploy](https://github.com/InternLM/lmdeploy)). The implementation is under [nightly-benchmarks folder](.buildkite/nightly-benchmarks/) and you can [reproduce](https://github.com/vllm-project/vllm/issues/8176) this benchmark using our one-click runnable script.
+- Python 3.10 (we developed and tested with Anaconda)
+- `git`
+- A C/C++ build toolchain (for vLLM dependencies)
+- Internet access on first run to download:
+  - `gpt2` model weights from Hugging Face,
+  - ShareGPT Vicuna dataset: `anon8231489123/ShareGPT_Vicuna_unfiltered`.
 
-vLLM is flexible and easy to use with:
-
-- Seamless integration with popular Hugging Face models
-- High-throughput serving with various decoding algorithms, including *parallel sampling*, *beam search*, and more
-- Tensor parallelism and pipeline parallelism support for distributed inference
-- Streaming outputs
-- OpenAI-compatible API server
-- Support NVIDIA GPUs, AMD CPUs and GPUs, Intel CPUs and GPUs, PowerPC CPUs, TPU, and AWS Neuron.
-- Prefix caching support
-- Multi-lora support
-
-vLLM seamlessly supports most popular open-source models on HuggingFace, including:
-- Transformer-like LLMs (e.g., Llama)
-- Mixture-of-Expert LLMs (e.g., Mixtral)
-- Embedding Models (e.g. E5-Mistral)
-- Multi-modal LLMs (e.g., LLaVA)
-
-Find the full list of supported models [here](https://docs.vllm.ai/en/latest/models/supported_models.html).
-
-## Getting Started
-
-Install vLLM with `pip` or [from source](https://vllm.readthedocs.io/en/latest/getting_started/installation.html#build-from-source):
+### 1.2 Create and activate environment (example)
 
 ```bash
-pip install vllm
+conda create -n vllm_prefix python=3.10 -y
+conda activate vllm_prefix
 ```
 
-Visit our [documentation](https://vllm.readthedocs.io/en/latest/) to learn more.
-- [Installation](https://vllm.readthedocs.io/en/latest/getting_started/installation.html)
-- [Quickstart](https://vllm.readthedocs.io/en/latest/getting_started/quickstart.html)
-- [Supported Models](https://vllm.readthedocs.io/en/latest/models/supported_models.html)
+### 1.3 Install vLLM + project dependencies
 
-## Contributing
+From the root of this repo:
 
-We welcome and value any contributions and collaborations.
-Please check out [CONTRIBUTING.md](./CONTRIBUTING.md) for how to get involved.
-
-## Sponsors
-
-vLLM is a community project. Our compute resources for development and testing are supported by the following organizations. Thank you for your support!
-
-<!-- Note: Please sort them in alphabetical order. -->
-<!-- Note: Please keep these consistent with docs/source/community/sponsors.md -->
-
-- a16z
-- AMD
-- Anyscale
-- AWS
-- Crusoe Cloud
-- Databricks
-- DeepInfra
-- Dropbox
-- Google Cloud
-- Lambda Lab
-- Nebius
-- NVIDIA
-- Replicate
-- Roblox
-- RunPod
-- Sequoia Capital
-- Skywork AI
-- Trainy
-- UC Berkeley
-- UC San Diego
-- ZhenFund
-
-We also have an official fundraising venue through [OpenCollective](https://opencollective.com/vllm). We plan to use the fund to support the development, maintenance, and adoption of vLLM.
-
-## Citation
-
-If you use vLLM for your research, please cite our [paper](https://arxiv.org/abs/2309.06180):
-```bibtex
-@inproceedings{kwon2023efficient,
-  title={Efficient Memory Management for Large Language Model Serving with PagedAttention},
-  author={Woosuk Kwon and Zhuohan Li and Siyuan Zhuang and Ying Sheng and Lianmin Zheng and Cody Hao Yu and Joseph E. Gonzalez and Hao Zhang and Ion Stoica},
-  booktitle={Proceedings of the ACM SIGOPS 29th Symposium on Operating Systems Principles},
-  year={2023}
-}
+```bash
+# Editable install with dev extras (recommended)
+pip install -e ".[dev]"
 ```
 
-## Contact Us
+If that fails, you can also do:
 
-* For technical questions and feature requests, please use Github issues or discussions.
-* For discussing with fellow users, please use Discord.
-* For coordinating contributions and development, please use Slack.
-* For security disclosures, please use Github's security advisory feature.
-* For collaborations and partnerships, please contact us at vllm-questions AT lists.berkeley.edu.
+```bash
+pip install -r requirements.txt
+```
 
-## Media Kit
+> **Note:** For all our experiments we run with:
+>
+> - `VLLM_PLATFORM=cpu`
+> - `VLLM_ATTENTION_BACKEND=TORCH_SDPA`
 
-* If you wish to use vLLM's logo, please refer to [our media kit repo](https://github.com/vllm-project/media-kit).
+These are set per command in the examples below.
+
+---
+
+## 2. Project-specific Repository Structure
+
+Only the most relevant project files are listed here:
+
+```text
+vllm/
+  engine/
+    llm_engine.py              # Simulator integration, prefix metrics, dump_prefix_metrics()
+  core/block/
+    block_manager.py           # SelfAttnBlockSpaceManager prefix reuse tracking
+  simulator.py                 # Simple token simulator (Milestone 1)
+
+scripts/
+  demo_sharegpt_client.py          # Demo: ShareGPT client simulator (M2 Task 1)
+  demo_prefix_metrics_hello.py     # Tiny "Hello world" run that records prefix metrics
+  run_sharegpt_prefix_single.py    # Single-turn chat: runs engine + logs prefix stats
+  run_sharegpt_prefix_multi.py     # Multi-turn chat: runs engine + logs prefix stats
+  run_all_workloads_prefix.py      # Runs all workloads (chat_single, chat_multi, qa, summarization)
+
+tools/
+  sharegpt_client_simulator.py # ShareGPT-based client simulator
+  summarize_prefix_stats.py    # Summaries from *_requests/blocks.jsonl
+  analyze_prefix_stats.py      # CDF plots for reuse fraction, hits per block, reuse gaps
+  simulate_cache_policies.py   # Simulate LRU/FIFO for a single workload trace
+  analyze_all_prefix_cache.py  # Run all workloads; tables + plots for cache hit rates
+  simulate_mixed_workloads.py  # Mixed trace + workload-aware eviction (M3 Task 2)
+```
+
+All metrics and figures are written under `/tmp` by default (configurable inside the scripts).
+
+---
+
+## 3. Milestone 1 – Simulator Integration in vLLM
+
+### 3.1 Token simulator
+
+We add a simple token **simulator** in `vllm/simulator.py` and wire it into `LLMEngine`:
+
+- The simulator keeps a `TraceRequest` per request ID.
+- For Milestone 1 it simply **echoes prompt tokens** back one by one as “generated” tokens.
+- `LLMEngine.step()` can bypass the real model and construct fake `SequenceOutput` objects using the simulator.
+
+This enables fast, controllable experiments without GPU computation.
+
+### 3.2 Unit test: engine with simulator
+
+To verify simulator integration:
+
+```bash
+VLLM_PLATFORM=cpu VLLM_ATTENTION_BACKEND=TORCH_SDPA \
+python -m pytest tests/test_m1_engine_with_simulator.py -s
+```
+
+Expected behavior:
+
+- vLLM loads a `gpt2` model on CPU.
+- The test sends prompt `"Hello world"`.
+- Output includes:
+
+  ```text
+  Prompt: Hello world
+  Generated text: Hello world
+  .
+  ```
+
+- The final `.` indicates the test passed.
+
+### 3.3 Tiny prefix-metrics sanity check
+
+```bash
+VLLM_PLATFORM=cpu VLLM_ATTENTION_BACKEND=TORCH_SDPA \
+python scripts/demo_prefix_metrics_hello.py
+```
+
+This sends a small prompt through the engine and writes prefix-metrics logs to:
+
+- `/tmp/prefix_metrics_toy_requests.jsonl`
+- `/tmp/prefix_metrics_toy_blocks.jsonl`
+
+---
+
+## 4. Milestone 2 – Prefix Reuse in ShareGPT Chat
+
+Milestone 2 focuses on **ShareGPT-style chat** using the ShareGPT Vicuna dataset.
+
+### 4.1 ShareGPT client simulator (Task 1)
+
+We implemented a ShareGPT-based client simulator in `tools/sharegpt_client_simulator.py`. It:
+
+- Loads `anon8231489123/ShareGPT_Vicuna_unfiltered` via Hugging Face `datasets`.
+- Converts each conversation to:
+  - A **single-turn** request (first human message only),
+  - A **multi-turn** chat transcript (`Human:` / `Assistant:` format).
+- Emits structured events containing:
+  - `time`, `conversation_id`, `turn_index`, `mode`, and `prompt`.
+
+Demo script:
+
+```bash
+VLLM_PLATFORM=cpu VLLM_ATTENTION_BACKEND=TORCH_SDPA \
+python scripts/demo_sharegpt_client.py
+```
+
+Expected:
+
+- Downloads the dataset on first run.
+- Prints several **single-turn** events, then **multi-turn** events.
+
+### 4.2 Instrumentation for prefix reuse
+
+We add instrumentation in:
+
+- **`SelfAttnBlockSpaceManager` (`block_manager.py`)**:
+  - Track per-block `hits_per_block` and `use_times`.
+- **`LLMEngine` (`llm_engine.py`)**:
+  - For each request, count tokens served via cached prefixes vs recomputed tokens.
+  - Compute per-request **`reuse_fraction = reused_tokens / total_tokens`**.
+  - Log per-request and per-block stats into JSONL files.
+
+### 4.3 Collect prefix metrics (single vs multi-turn)
+
+Single-turn chat:
+
+```bash
+VLLM_PLATFORM=cpu VLLM_ATTENTION_BACKEND=TORCH_SDPA \
+PREFIX_MODE=single \
+python scripts/run_sharegpt_prefix_single.py
+```
+
+Multi-turn chat:
+
+```bash
+VLLM_PLATFORM=cpu VLLM_ATTENTION_BACKEND=TORCH_SDPA \
+PREFIX_MODE=multi \
+python scripts/run_sharegpt_prefix_multi.py
+```
+
+This produces (under `/tmp`):
+
+- `prefix_metrics_sharegpt_single_requests.jsonl`
+- `prefix_metrics_sharegpt_single_blocks.jsonl`
+- `prefix_metrics_sharegpt_multi_requests.jsonl`
+- `prefix_metrics_sharegpt_multi_blocks.jsonl`
+
+### 4.4 Summaries & CDF plots (Task 2)
+
+#### 4.4.1 Text summaries
+
+```bash
+python tools/summarize_prefix_stats.py /tmp/prefix_metrics_sharegpt_single
+python tools/summarize_prefix_stats.py /tmp/prefix_metrics_sharegpt_multi
+```
+
+These print:
+
+- Reuse fraction stats (mean, median, p90, p99, fraction of requests with reuse > 0),
+- Hits per block stats,
+- Reuse gap stats.
+
+#### 4.4.2 Per-workload CDF plots
+
+```bash
+python tools/analyze_prefix_stats.py /tmp/prefix_metrics_sharegpt_single
+python tools/analyze_prefix_stats.py /tmp/prefix_metrics_sharegpt_multi
+```
+
+Generates plots in `/tmp`, for example:
+
+- `reuse_fraction_cdf_single.png`, `reuse_fraction_cdf_multi.png`
+- `block_hits_cdf_single.png`, `block_hits_cdf_multi.png`
+- `block_reuse_gaps_cdf_single.png`, `block_reuse_gaps_cdf_multi.png`
+
+These show that:
+
+- **Single-turn chat** has almost no reuse.
+- **Multi-turn chat** has high reuse fraction and strong locality.
+
+### 4.5 Cache simulations for single vs multi-turn (Task 3)
+
+We simulate LRU and FIFO caches for varying capacities and block sizes using the block-level traces.
+
+Example commands (block size = 16):
+
+```bash
+# Single-turn chat
+python tools/simulate_cache_policies.py /tmp/prefix_metrics_sharegpt_single 16 LRU
+python tools/simulate_cache_policies.py /tmp/prefix_metrics_sharegpt_single 16 FIFO
+
+# Multi-turn chat
+python tools/simulate_cache_policies.py /tmp/prefix_metrics_sharegpt_multi 16 LRU
+python tools/simulate_cache_policies.py /tmp/prefix_metrics_sharegpt_multi 16 FIFO
+```
+
+We repeat for block sizes 32 and 64 by changing the second argument.  
+Outputs include hits, misses, events, and hit rates.
+
+Key findings:
+
+- **Single-turn chat**: hit rates ≈ 0% for all capacities/policies → caching is not useful.
+- **Multi-turn chat**: hit rate ≈ 57% with 256 blocks (block size 16), saturating at that point.
+- LRU and FIFO behave similarly; block size and workload type matter more than policy choice here.
+
+---
+
+## 5. Milestone 3 – Multiple Workloads & Workload-aware Eviction
+
+Milestone 3 generalizes to four workloads:
+
+- `chat_multi` (multi-turn chat),
+- `chat_single` (single-turn chat),
+- `qa` (short question–answer style),
+- `summarization` (long-document summarization).
+
+### 5.1 Generating traces for all workloads
+
+We use a single script to generate prefix traces (requests + blocks) for all workloads and block sizes {16, 32, 64}:
+
+```bash
+VLLM_PLATFORM=cpu VLLM_ATTENTION_BACKEND=TORCH_SDPA \
+python scripts/run_all_workloads_prefix.py
+```
+
+This writes JSONL files like:
+
+- `/tmp/prefix_chat_multi_b16_requests.jsonl`
+- `/tmp/prefix_chat_multi_b16_blocks.jsonl`
+- `/tmp/prefix_chat_single_b16_requests.jsonl`
+- ...
+- (similarly for `qa` and `summarization`, and block sizes 32, 64).
+
+### 5.2 Per-workload reuse & cache simulation (Task 1)
+
+We analyze all workloads together with:
+
+```bash
+python tools/analyze_all_prefix_cache.py /tmp
+```
+
+This script:
+
+1. Discovers all `prefix_*_b*_requests/blocks.jsonl` under `/tmp`.
+2. Produces **Task-2 style** prefix stats for each workload:
+   - Mean/median/pXX reuse fraction,
+   - Fraction of requests with reuse > 0,
+   - Approximate “infinite-cache” hit rate.
+3. Produces **Task-3 style** cache hit tables across:
+   - Block sizes: 16, 32, 64,
+   - Capacities: 64, 128, 256, 512,
+   - Policies: LRU, FIFO.
+4. Writes plots:
+   - `reuse_fraction_cdf_<workload>.png`
+   - `block_hits_cdf_<workload>.png`
+   - `block_reuse_gaps_cdf_<workload>.png`
+   - `cache_hits_<workload>_LRU.png`
+   - `cache_hits_<workload>_FIFO.png`
+
+High-level conclusions:
+
+- **Cache-friendly workloads**:
+  - `chat_multi` and `qa` have high reuse fraction and high hit rates with modest cache sizes (e.g., ~0.57 and ~0.80 hit rate at block=16, cap=256).
+- **Cache-unfriendly workloads**:
+  - `chat_single` and `summarization` have hit rates near zero even with large caches → not worth caching.
+- LRU vs FIFO again behave similarly; the dominant factor is **which workload you cache** and the chosen **block size**.
+
+### 5.3 Mixed workload & workload-aware eviction (Task 2)
+
+We simulate a **mixed trace** combining all four workloads using:
+
+```bash
+python tools/simulate_mixed_workloads.py /tmp
+```
+
+The script:
+
+1. Loads the block traces (block size 16) for:
+   - `chat_multi`, `chat_single`, `qa`, `summarization`.
+2. Interleaves them in a fixed pattern into a single mixed stream.
+3. Simulates three policies with capacity 256 blocks:
+   - **Baseline LRU** (cache everything),
+   - **Baseline FIFO** (cache everything),
+   - **Workload-aware LRU (WA-LRU)**:
+     - Cache **only** `chat_multi` and `qa`,
+     - Treat `chat_single` and `summarization` as uncached (always miss, no insertion).
+
+The script prints per-workload and overall stats.  
+Example (what we observed):
+
+- **Baseline LRU**:
+  - Overall hit rate ≈ 0.3901.
+- **Baseline FIFO**:
+  - Overall hit rate ≈ 0.3693.
+- **Workload-aware LRU (cache only chat_multi + qa)**:
+  - Overall hit rate ≈ 0.4281.
+  - `chat_multi` and `qa` hit rates match their single-workload behavior.
+  - `chat_single` and `summarization` effectively have zero hit rate, but they had almost no cache benefit even in isolation.
+
+This demonstrates that **even a simple workload-aware policy** (based on offline measurements) can:
+
+- Improve overall hit rate,
+- Protect cache-friendly workloads from pollution by cache-unfriendly workloads.
+
+---
+
+## 6. Notes and Caveats
+
+- You may see warnings like:
+
+  ```text
+  PermissionError: [Errno 13] Permission denied: '/Users/<user>/.config/vllm'
+  ```
+
+  These are from vLLM’s optional usage telemetry and **do not affect** our experiments.
+
+- All experiments are run on **CPU** for simplicity; we use small subsets of the workloads to keep runtimes reasonable.
+
+- Dataset and model downloads happen automatically on first use:
+  - `gpt2` from Hugging Face transformers,
+  - ShareGPT dataset from `datasets`.
+
+---
+
+## 7. Team
+
+- Tarun Vaseekaran – nv30@rice.edu
+- Sai Santosh Venkatesh Charumathi – sv77@rice.edu
+- Elakkiyan Pugazhenthi – ep68@rice.edu
+
+Please contact us if you have any questions about the code or experiments.
